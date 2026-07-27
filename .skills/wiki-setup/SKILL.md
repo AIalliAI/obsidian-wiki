@@ -37,6 +37,19 @@ If `.env` doesn't exist, create it from `.env.example`. Ask the user for:
    - If using CLI mode, set `QMD_CLI_SEARCH_MODE=quality` by default; suggest `balanced` if reranking is too slow.
    - If unsure, skip for now — both skills fall back to `Grep` automatically.
    - Install instructions: see `.env.example` (QMD section).
+   - **If `QMD_WIKI_COLLECTION` is set, verify the collection excludes `_raw/`.** The wiki
+     collection and papers collection must stay disjoint — `wiki-query` cites them as
+     separate layers (compiled knowledge vs. raw staging), and `OBSIDIAN_VAULT_PATH` contains
+     `_raw/`, so a plain `qmd collection add <vault>` silently merges the two.
+     Read `~/.config/qmd/index.yml`, find the entry for `$QMD_WIKI_COLLECTION`, and check its
+     `ignore` list includes `_raw/**` (and ideally `log.md`, which has no semantic value). If
+     the collection doesn't exist yet, create it (`qmd collection add "$OBSIDIAN_VAULT_PATH"
+     --name <collection-name>`), then add the `ignore` block to `index.yml` by hand — `qmd`
+     has no `--ignore` flag and refuses a second `collection add` on a path that already has
+     one, so editing the YAML is the only way to scope it. Run `qmd update` after editing.
+     If the collection already exists without the `ignore` block, tell the user their
+     wiki collection is indexing `_raw/` (including `_raw/_archived/` drafts left behind by
+     `wiki-ingest`) and offer to add the `ignore` block and re-run `qmd update`.
 
 5. **Token budget warning threshold?** → `WIKI_TOKEN_WARN_THRESHOLD`
    - Default: `100000` (warn when full-wiki read would cost > 100K tokens)
@@ -291,4 +304,4 @@ If yes:
 
 ## Optional: Refresh QMD After Setup
 
-If `QMD_WIKI_COLLECTION` is configured and the local QMD CLI is available, run `qmd update` after the initial vault files exist so the fresh vault is immediately queryable. No embedding pass is usually needed at setup time because the vault starts empty, so a plain update is enough unless you have already populated pages.
+If `QMD_WIKI_COLLECTION` is configured and the local QMD CLI is available, run `qmd update` after the initial vault files exist so the fresh vault is immediately queryable. No embedding pass is usually needed at setup time because the vault starts empty, so a plain update is enough unless you have already populated pages. Before running it, confirm the `_raw/` exclusion described in Step 1.4 is in place — otherwise this update indexes the (currently empty) staging directory into the wiki collection too, and every future draft dropped there joins it silently.
