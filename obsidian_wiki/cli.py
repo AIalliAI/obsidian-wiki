@@ -748,6 +748,146 @@ def cmd_graph_analyse(args: argparse.Namespace) -> int:
     return 0
 
 
+DEFAULT_CLAUDE_DIR = "~/.claude"
+DEFAULT_BRAIN_DIR = "~/.claude/session-brain"
+
+
+def _brain_dir(args: argparse.Namespace) -> Path:
+    return Path(
+        args.out or os.environ.get("WIKI_SESSION_BRAIN_DIR") or DEFAULT_BRAIN_DIR
+    ).expanduser()
+
+
+def _skip_list(args: argparse.Namespace) -> list[str]:
+    raw = args.skip or os.environ.get("WIKI_SKIP_PROJECTS", "")
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
+def cmd_sessions_build(args: argparse.Namespace) -> int:
+    from obsidian_wiki.session_graph import build
+    claude_dir = Path(args.claude_dir).expanduser()
+    bookmarks = Path(args.bookmarks).expanduser() if args.bookmarks else \
+        Path("~/.bookmark-agent/bookmarks.json").expanduser()
+
+    def progress(message: str) -> None:
+        if args.verbose:
+            print(f"… {message}", file=sys.stderr)
+
+    result = build(
+        claude_dir,
+        _brain_dir(args),
+        k=args.k,
+        min_sim=args.min_sim,
+        mutual=args.mutual,
+        half_life_days=args.half_life,
+        full=args.full,
+        since=args.since,
+        skip=_skip_list(args),
+        bookmarks_path=bookmarks,
+        write_html=not args.no_html,
+        progress=progress,
+    )
+    if args.json:
+        print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
+        return 0
+
+    stats = result["stats"]
+    print(f"{stats['sessions']} sessions ({stats['full']} with transcripts, "
+          f"{stats['thin']} history-only) · {stats['edges']} links · "
+          f"{stats['clusters']} topics · {stats['unclustered']} unclustered")
+    print(f"read {stats['read_this_run']} this run, reused {stats['reused']} cached")
+    for cluster in result["clusters"][:15]:
+        flag = " [dormant]" if cluster["dormant"] else (" [hot]" if cluster["momentum"] >= 2 else "")
+        print(f"  {cluster['size']:4}  {cluster['name'] or cluster['label']}{flag}")
+    if result["unnamed"]:
+        print(f"{result['unnamed']} unnamed topic(s) — run the session-brain skill to name them")
+    print(f"-> {result['out_dir']}")
+    return 0
+
+
+def cmd_sessions_query(args: argparse.Namespace) -> int:
+    from obsidian_wiki.session_query import query
+    try:
+        result = query(
+            _brain_dir(args), args.question,
+            top_n=args.top, max_load=args.max_load, half_life_days=args.half_life,
+            project=args.project, cluster=args.cluster, since=args.since,
+            min_score=args.min_score,
+        )
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    if args.json:
+        print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
+        return 0
+    if not result["candidates"]:
+        print("no matching sessions")
+        return 0
+    for c in result["candidates"]:
+        loadable = "" if c["loadable"] else "  (no transcript)"
+        print(f"{c['score']:.2f}  {c['end_ts'][:10]}  {c['project'][:18]:18}  "
+              f"{(c['title'] or '(untitled)')[:52]:52}{loadable}")
+        print(f"      {c['why']}")
+    if result["should_load"]:
+        print(f"\nload: {result['load_command']}")
+    return 0
+
+
+def cmd_sessions_show(args: argparse.Namespace) -> int:
+    from obsidian_wiki.session_query import show
+    try:
+        result = show(_brain_dir(args), args.session_id, neighbors=args.neighbors)
+    except (FileNotFoundError, KeyError) as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result, indent=2) if args.pretty else json.dumps(result))
+    return 0
+
+
+def cmd_sessions_clusters(args: argparse.Namespace) -> int:
+    from obsidian_wiki.session_graph import load_graph
+    try:
+        _, clusters_doc = load_graph(_brain_dir(args))
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    clusters = clusters_doc.get("clusters", [])
+    if args.unnamed:
+        clusters = [c for c in clusters if not c.get("name")]
+    clusters = clusters[:args.top]
+    if args.json:
+        payload = {"clusters": clusters}
+        print(json.dumps(payload, indent=2) if args.pretty else json.dumps(payload))
+        return 0
+    for c in clusters:
+        flag = " [dormant]" if c.get("dormant") else (" [hot]" if c.get("momentum", 0) >= 2 else "")
+        print(f"{c['id']:3}  {c['size']:4}  {c.get('name') or c['label']}{flag}")
+        print(f"      terms: {', '.join(t for t, _ in c['top_terms'][:8])}")
+    return 0
+
+
+def cmd_sessions_name(args: argparse.Namespace) -> int:
+    from obsidian_wiki.session_graph import set_cluster_names
+    raw = sys.stdin.read() if args.from_file == "-" else \
+        Path(args.from_file).expanduser().read_text(encoding="utf-8")
+    try:
+        updates = json.loads(raw)
+    except ValueError as exc:
+        print(f"error: invalid JSON: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(updates, list):
+        print('error: expected a JSON array of {"id": N, "name": "...", "summary": "..."}',
+              file=sys.stderr)
+        return 1
+    try:
+        result = set_cluster_names(_brain_dir(args), updates)
+    except FileNotFoundError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 1
+    print(json.dumps(result))
+    return 0
+
+
 def cmd_cache_check(args: argparse.Namespace) -> int:
     from obsidian_wiki.cache import check_sources
     vault = Path(args.vault).expanduser().resolve()
@@ -1134,6 +1274,77 @@ def build_parser() -> argparse.ArgumentParser:
     ga.add_argument("--top", type=int, default=20, help="number of top results to return (default: 20)")
     ga.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
     ga.set_defaults(func=cmd_graph_analyse)
+
+    sb = sub.add_parser(
+        "sessions-build",
+        help="build a topic graph over your agent session history (writes a sidecar, not the vault)",
+    )
+    sb.add_argument("--claude-dir", default=DEFAULT_CLAUDE_DIR,
+                    help=f"agent session cache to read (default: {DEFAULT_CLAUDE_DIR})")
+    sb.add_argument("--out", default=None,
+                    help=f"output directory (default: $WIKI_SESSION_BRAIN_DIR or {DEFAULT_BRAIN_DIR})")
+    sb.add_argument("--k", type=int, default=8, help="neighbours per session (default: 8)")
+    sb.add_argument("--min-sim", type=float, default=0.08,
+                    help="minimum cosine similarity for an edge (default: 0.08)")
+    sb.add_argument("--mutual", action="store_true",
+                    help="keep only mutual kNN edges — tighter, smaller clusters")
+    sb.add_argument("--half-life", type=float, default=90.0,
+                    help="recency half-life in days (default: 90)")
+    sb.add_argument("--since", help="only read sessions modified on or after this ISO date")
+    sb.add_argument("--skip",
+                    help="comma-separated substrings of project dirs to skip (or $WIKI_SKIP_PROJECTS). "
+                         "Cache dir names begin with '-', which argparse reads as a flag — pass the "
+                         "bare name ('game') or use --skip=-w-game")
+    sb.add_argument("--full", action="store_true", help="ignore caches and re-read every session")
+    sb.add_argument("--no-html", action="store_true", help="skip writing graph.html")
+    sb.add_argument("--bookmarks", help="path to bookmarks.json (default: ~/.bookmark-agent/bookmarks.json)")
+    sb.add_argument("--json", action="store_true", help="emit JSON instead of a human summary")
+    sb.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    sb.add_argument("-v", "--verbose", action="store_true", help="report progress to stderr")
+    sb.set_defaults(func=cmd_sessions_build)
+
+    sq = sub.add_parser(
+        "sessions-query",
+        help="find the sessions most relevant to a topic, ranked by similarity and recency",
+    )
+    sq.add_argument("question", help="topic or question to search for")
+    sq.add_argument("--out", default=None, help="session-brain directory")
+    sq.add_argument("--top", type=int, default=10, help="candidates to return (default: 10)")
+    sq.add_argument("--max-load", type=int, default=3,
+                    help="max sessions to recommend loading (default: 3)")
+    sq.add_argument("--half-life", type=float, default=None,
+                    help="override the recency half-life used at build time")
+    sq.add_argument("--project", help="restrict to one project")
+    sq.add_argument("--cluster", type=int, help="restrict to one topic cluster id")
+    sq.add_argument("--since", help="only consider sessions ending on or after this ISO date")
+    sq.add_argument("--min-score", type=float, default=0.05, help="drop candidates below this score")
+    sq.add_argument("--json", action="store_true", help="emit JSON instead of a human summary")
+    sq.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    sq.set_defaults(func=cmd_sessions_query)
+
+    ssh = sub.add_parser(
+        "sessions-show",
+        help="show one session's graph node and its nearest neighbours",
+    )
+    ssh.add_argument("session_id", help="session id (full or unique prefix)")
+    ssh.add_argument("--out", default=None, help="session-brain directory")
+    ssh.add_argument("--neighbors", type=int, default=8, help="neighbours to include (default: 8)")
+    ssh.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    ssh.set_defaults(func=cmd_sessions_show)
+
+    scl = sub.add_parser("sessions-clusters", help="list the discovered topic clusters")
+    scl.add_argument("--out", default=None, help="session-brain directory")
+    scl.add_argument("--unnamed", action="store_true", help="only clusters that still need a name")
+    scl.add_argument("--top", type=int, default=20, help="max clusters to list (default: 20)")
+    scl.add_argument("--json", action="store_true", help="emit JSON instead of a human summary")
+    scl.add_argument("--pretty", action="store_true", help="pretty-print JSON output")
+    scl.set_defaults(func=cmd_sessions_clusters)
+
+    snm = sub.add_parser("sessions-name", help="assign names to topic clusters (durable across rebuilds)")
+    snm.add_argument("--out", default=None, help="session-brain directory")
+    snm.add_argument("--from", dest="from_file", required=True, metavar="FILE",
+                     help='JSON array of {"id": N, "name": "...", "summary": "..."}; use - for stdin')
+    snm.set_defaults(func=cmd_sessions_name)
 
     cc = sub.add_parser(
         "cache-check",
