@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from obsidian_wiki import __version__
@@ -289,6 +290,106 @@ def write_config(vault_path: str) -> None:
         f'OBSIDIAN_WIKI_VERSION="{__version__}"\n'
     )
     print(f"✅  Global config written to {GLOBAL_CONFIG}")
+
+
+VAULT_SUBDIRS = (
+    "concepts",
+    "entities",
+    "skills",
+    "references",
+    "synthesis",
+    "journal",
+    "projects",
+    "_archives",
+    "_raw",
+    "_staging",
+    ".obsidian",
+)
+
+
+def scaffold_vault(vault_path: Path) -> bool:
+    """Create the vault directory structure and special files if they don't exist yet.
+
+    Idempotent: existing files/dirs are left untouched. Returns True if the vault
+    directory itself had to be created (i.e. this is a brand new vault).
+    """
+    created = not vault_path.is_dir()
+    for name in VAULT_SUBDIRS:
+        (vault_path / name).mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    index_md = vault_path / "index.md"
+    if not index_md.exists():
+        index_md.write_text(
+            "---\n"
+            "title: Wiki Index\n"
+            "---\n\n"
+            "# Wiki Index\n\n"
+            f"*This index is automatically maintained. Last updated: {timestamp}*\n\n"
+            "## Concepts\n\n"
+            "*No pages yet. Use `wiki-ingest` to add your first source.*\n\n"
+            "## Entities\n\n"
+            "## Skills\n\n"
+            "## References\n\n"
+            "## Synthesis\n\n"
+            "## Journal\n"
+        )
+
+    log_md = vault_path / "log.md"
+    if not log_md.exists():
+        log_md.write_text(
+            "---\n"
+            "title: Wiki Log\n"
+            "---\n\n"
+            "# Wiki Log\n\n"
+            f'- [{timestamp}] INIT vault_path="{vault_path}" '
+            "categories=concepts,entities,skills,references,synthesis,journal\n"
+        )
+
+    hot_md = vault_path / "hot.md"
+    if not hot_md.exists():
+        hot_md.write_text(
+            "---\n"
+            "title: Hot Cache\n"
+            f"updated: {timestamp}\n"
+            "---\n\n"
+            "# Hot Cache\n\n"
+            "*A ~500-word semantic snapshot of recent activity. Updated after every major write operation.*\n\n"
+            "## Recent Activity\n\n"
+            f"- [{timestamp}] INIT — vault created at {vault_path}\n\n"
+            "## Active Threads\n\n"
+            "*None yet — start ingesting sources to populate.*\n\n"
+            "## Key Takeaways\n\n"
+            "*None yet.*\n\n"
+            "## Flagged Contradictions\n\n"
+            "*None yet.*\n"
+        )
+
+    manifest_json = vault_path / ".manifest.json"
+    if not manifest_json.exists():
+        manifest_json.write_text("{}\n")
+
+    app_json = vault_path / ".obsidian" / "app.json"
+    if not app_json.exists():
+        app_json.write_text(
+            json.dumps(
+                {
+                    "strictLineBreaks": False,
+                    "showFrontmatter": False,
+                    "defaultViewMode": "preview",
+                    "livePreview": True,
+                },
+                indent=2,
+            )
+            + "\n"
+        )
+
+    appearance_json = vault_path / ".obsidian" / "appearance.json"
+    if not appearance_json.exists():
+        appearance_json.write_text(json.dumps({"baseFontSize": 16}, indent=2) + "\n")
+
+    return created
 
 
 def _check_stale() -> None:
@@ -635,6 +736,13 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if not vault_path:
         print("    → Vault path not set yet. Re-run with `--vault /path/to/vault`")
         print("      or edit OBSIDIAN_VAULT_PATH in ~/.obsidian-wiki/config.")
+    else:
+        vault_dir = Path(vault_path).expanduser()
+        vault_created = scaffold_vault(vault_dir)
+        if vault_created:
+            print(f"✅  Vault created at {vault_dir}")
+        else:
+            print(f"✅  Vault verified at {vault_dir}")
 
     if not args.project_only:
         print()
