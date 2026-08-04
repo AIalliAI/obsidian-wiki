@@ -10,9 +10,11 @@ classifier can't prove read-only — keeps the pre-exemption behavior.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
@@ -38,11 +40,11 @@ def _edit_entry(tool="Edit"):
     }
 
 
-def _tool_entry(name):
+def _tool_entry(name, tool_input=None):
     return {
         "message": {
             "role": "assistant",
-            "content": [{"type": "tool_use", "name": name, "input": {}}],
+            "content": [{"type": "tool_use", "name": name, "input": tool_input or {}}],
         }
     }
 
@@ -62,7 +64,14 @@ class StopHookBehaviorTest(unittest.TestCase):
         self.addCleanup(shutil.rmtree, self.tmp, ignore_errors=True)
         self._session_seq = 0
 
-    def _run(self, entries, session_id=None, stop_hook_active=False):
+    def _sentinel(self, session_id):
+        return self.tmp / f"wiki-stop-capture-{session_id}.done"
+
+    def _age_sentinel(self, session_id, seconds):
+        old = time.time() - seconds
+        os.utime(self._sentinel(session_id), (old, old))
+
+    def _run(self, entries, session_id=None, stop_hook_active=False, extra_env=None):
         transcript = self.tmp / "transcript.jsonl"
         transcript.write_text("".join(json.dumps(e) + "\n" for e in entries))
         if session_id is None:
@@ -79,7 +88,7 @@ class StopHookBehaviorTest(unittest.TestCase):
             input=json.dumps(payload),
             capture_output=True,
             text=True,
-            env={"PATH": "/usr/bin:/bin:/usr/local/bin", "TMPDIR": str(self.tmp)},
+            env={"PATH": "/usr/bin:/bin:/usr/local/bin", "TMPDIR": str(self.tmp), **(extra_env or {})},
         )
 
     def test_file_edit_triggers_nudge(self):
@@ -336,6 +345,279 @@ class StopHookBehaviorTest(unittest.TestCase):
     def test_python_smtplib_counts_as_mutating(self):
         entries = [_bash_entry("python3 -c \"import smtplib; ...\"")] * 4
         self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_task_subagent_disables_exemption(self):
+        entries = _READONLY_BASH + [
+            _tool_entry("Task", {"subagent_type": "general-purpose", "prompt": "fix the bug"})
+        ]
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_readonly_agent_types_keep_exemption(self):
+        entries = _READONLY_BASH + [
+            _tool_entry("Task", {"subagent_type": "Explore", "prompt": "find the config"}),
+            _tool_entry("Task", {"subagent_type": "Plan", "prompt": "plan the change"}),
+        ]
+        self.assertEqual(self._run(entries).returncode, 0)
+
+    def test_enter_worktree_disables_exemption(self):
+        entries = _READONLY_BASH + [_tool_entry("EnterWorktree")]
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_explain_analyze_dml_disables_exemption(self):
+        entries = _READONLY_BASH + [
+            _tool_entry(
+                "mcp__neon__explain_sql_statement",
+                {"analyze": True, "sql": "DELETE FROM users"},
+            )
+        ]
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_explain_plain_select_keeps_exemption(self):
+        entries = _READONLY_BASH + [
+            _tool_entry("mcp__neon__explain_sql_statement", {"sql": "SELECT count(*) FROM users"})
+        ]
+        self.assertEqual(self._run(entries).returncode, 0)
+
+    def test_prepare_named_tool_disables_exemption(self):
+        entries = _READONLY_BASH + [_tool_entry("mcp__neon__prepare_query_tuning")]
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_resolve_named_tool_disables_exemption(self):
+        entries = _READONLY_BASH + [
+            _tool_entry("mcp__codex_apps__github_resolve_review_thread")
+        ]
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_double_quote_backslash_parity(self):
+        # "a\\" — the two backslashes escape each other, the quote CLOSES,
+        # and the rm after the semicolon runs unquoted.
+        entries = [_bash_entry('echo "a\\\\" ; rm -rf ./victim')] * 4
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_curl_config_and_quote_count_as_mutating(self):
+        entries = [
+            _bash_entry("printf 'request = \"DELETE\"\\n' | curl --config - http://h/items/42"),
+            _bash_entry("curl -Q 'DELE important.txt' ftp://server/"),
+            _bash_entry("curl -sK curlrc http://h/"),
+            _bash_entry("curl --quote 'DELE x' ftp://server/"),
+        ]
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_python_sqlite_execute_counts_as_mutating(self):
+        entries = [
+            _bash_entry(
+                "python3 -c \"import sqlite3; sqlite3.connect('app.db', isolation_level=None)"
+                ".execute('delete from users')\""
+            )
+        ] * 4
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_python_os_alias_counts_as_mutating(self):
+        entries = [_bash_entry("python3 -c \"import os as x; x.remove('/tmp/victim')\"")] * 4
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_python_path_open_write_counts_as_mutating(self):
+        entries = [
+            _bash_entry(
+                "python3 -c \"from pathlib import Path; Path('/tmp/out').open('w').close()\""
+            )
+        ] * 4
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_sudo_date_positional_counts_as_mutating(self):
+        entries = [_bash_entry("sudo date 010100002025")] * 4
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_date_readonly_forms_stay_readonly(self):
+        entries = [
+            _bash_entry("date +%Y-%m-%d"),
+            _bash_entry("date -u"),
+            _bash_entry("date -j -f '%Y' '2026' +%s"),
+            _bash_entry("date"),
+        ]
+        self.assertEqual(self._run(entries).returncode, 0)
+
+    def test_git_upload_pack_counts_as_mutating(self):
+        entries = [
+            _bash_entry("git ls-remote --upload-pack='touch /tmp/pwn' ssh://host/repo")
+        ] * 4
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_awk_variable_targets_count_as_mutating(self):
+        entries = [
+            _bash_entry("awk 'BEGIN { c=\"rm -rf /tmp/victim\"; print | c; close(c) }'"),
+            _bash_entry("awk 'BEGIN { f=\"/tmp/out\"; print \"x\" > f; close(f) }'"),
+            _bash_entry("awk 'BEGIN { c=\"rm x\"; print | c }'"),
+            _bash_entry("awk '{ print > outfile }' outfile=/tmp/o data.txt"),
+        ]
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_awk_numeric_comparison_stays_readonly(self):
+        entries = [_bash_entry("awk '$3 > 100 { print $1 }' data.txt")] * 4
+        self.assertEqual(self._run(entries).returncode, 0)
+
+    def test_sed_alternate_delimiter_write_counts_as_mutating(self):
+        entries = [_bash_entry("sed 's#a#b#w /tmp/out' input.txt")] * 4
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_xxd_uniq_stdin_output_counts_as_mutating(self):
+        entries = [
+            _bash_entry("printf 41 | xxd -r -p - /tmp/out.bin"),
+            _bash_entry("printf 'x\\nx\\n' | uniq - /tmp/out.txt"),
+            _bash_entry("printf 42 | xxd -r -p - /tmp/out2.bin"),
+            _bash_entry("printf 'y\\ny\\n' | uniq - /tmp/out2.txt"),
+        ]
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_less_log_file_counts_as_mutating(self):
+        entries = [_bash_entry("printf x | less -F -o /tmp/log")] * 4
+        self.assertEqual(self._run(entries).returncode, 2)
+
+    def test_rearm_after_age_and_new_edits(self):
+        first = self._run([_edit_entry()] * 5, session_id="long")
+        self.assertEqual(first.returncode, 2)
+        self._age_sentinel("long", 7 * 3600)
+        second = self._run([_edit_entry()] * 20, session_id="long")
+        self.assertEqual(second.returncode, 2)
+        self.assertIn("20 file edit(s)", second.stderr)
+
+    def test_no_rearm_while_sentinel_is_young(self):
+        first = self._run([_edit_entry()] * 5, session_id="young")
+        self.assertEqual(first.returncode, 2)
+        # Plenty of new edits, but the nudge was moments ago.
+        second = self._run([_edit_entry()] * 40, session_id="young")
+        self.assertEqual(second.returncode, 0)
+
+    def test_no_rearm_without_enough_new_edits(self):
+        first = self._run([_edit_entry()] * 5, session_id="idle")
+        self.assertEqual(first.returncode, 2)
+        self._age_sentinel("idle", 7 * 3600)
+        # Only 3 edits since the nudge that recorded 5.
+        second = self._run([_edit_entry()] * 8, session_id="idle")
+        self.assertEqual(second.returncode, 0)
+        # The sentinel must survive, still holding the original count.
+        self.assertEqual((self._sentinel("idle") / "edits").read_text(), "5")
+
+    def test_rearm_updates_stored_count_and_rests_again(self):
+        first = self._run([_edit_entry()] * 5, session_id="cycle")
+        self.assertEqual(first.returncode, 2)
+        self._age_sentinel("cycle", 7 * 3600)
+        second = self._run([_edit_entry()] * 20, session_id="cycle")
+        self.assertEqual(second.returncode, 2)
+        self.assertEqual((self._sentinel("cycle") / "edits").read_text(), "20")
+        # Fresh sentinel again: more edits right away stay silent.
+        third = self._run([_edit_entry()] * 40, session_id="cycle")
+        self.assertEqual(third.returncode, 0)
+
+    def test_pre_feature_sentinel_rearms_from_zero(self):
+        # A sentinel claimed before the re-arm feature has no edits file:
+        # the whole current count is the delta.
+        self._sentinel("legacy").mkdir()
+        self._age_sentinel("legacy", 7 * 3600)
+        result = self._run([_edit_entry()] * 12, session_id="legacy")
+        self.assertEqual(result.returncode, 2)
+
+    def test_concurrent_rearm_produces_exactly_one_nudge(self):
+        # Duplicate hook registration fires two invocations per stop. With an
+        # expired sentinel both pass the age check; the mv claim plus the
+        # young-retire guard must let exactly one of them re-nudge — the
+        # loser either loses the mv or grabs the winner's FRESH sentinel,
+        # sees it is young, restores it, and stands down.
+        #
+        # TRUE concurrency matters: the hook's first statement is
+        # INPUT=$(cat), so feeding stdin through sequential communicate()
+        # calls would hold the second process at that read until the first
+        # had fully exited — serializing the bodies and never exercising
+        # the race. Both processes therefore get stdin from a pre-written
+        # file and run the whole body simultaneously; the transcript is
+        # large so the parse phase gives a wide overlap window between the
+        # age check and the claim.
+        transcript = self.tmp / "transcript.jsonl"
+        transcript.write_text(
+            "".join(json.dumps(_edit_entry()) + "\n" for _ in range(200))
+        )
+        raced_rounds = 0
+        for round_no in range(10):
+            sid = f"race{round_no}"
+            sentinel = self._sentinel(sid)
+            sentinel.mkdir()
+            (sentinel / "edits").write_text("0")
+            self._age_sentinel(sid, 7 * 3600)
+            payload_file = self.tmp / f"payload{round_no}.json"
+            payload_file.write_text(
+                json.dumps({"session_id": sid, "transcript_path": str(transcript)})
+            )
+            env = {"PATH": "/usr/bin:/bin:/usr/local/bin", "TMPDIR": str(self.tmp)}
+            # bash -x: the xtrace on stderr is evidence of WHICH path each
+            # process took, asserted on below — outcome checks alone cannot
+            # distinguish a genuine race from accidental serialization.
+            procs = []
+            for _ in range(2):
+                with payload_file.open() as stdin_file:
+                    procs.append(
+                        subprocess.Popen(
+                            ["bash", "-x", str(HOOK)],
+                            stdin=stdin_file,
+                            stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE,
+                            text=True,
+                            env=env,
+                        )
+                    )
+            codes = []
+            traces = []
+            for p in procs:
+                _, stderr = p.communicate()
+                codes.append(p.returncode)
+                traces.append(stderr)
+            self.assertEqual(
+                sorted(codes), [0, 2], f"round {round_no}: exactly one nudge, got {codes}"
+            )
+            self.assertTrue(sentinel.exists(), f"round {round_no}: sentinel must survive")
+            # State invariant: whichever invocation ends up owning the
+            # sentinel, the edit count must be present — the winner writes
+            # it, and a restorer repairs it if it grabbed the sentinel in
+            # the winner's mkdir-to-write gap. Without it, the next re-arm
+            # would compute its delta from zero and fire early.
+            self.assertEqual(
+                (sentinel / "edits").read_text(),
+                "200",
+                f"round {round_no}: sentinel lost its edit-count state",
+            )
+            # A process that reached the claim phase shows an mv or mkdir on
+            # the sentinel path in its xtrace; a serialized loser instead
+            # exits at the top age check and never touches the sentinel.
+            marker = f"wiki-stop-capture-{sid}.done"
+            if all(
+                any(
+                    marker in line and ("+ mv " in line or "+ mkdir " in line)
+                    for line in trace.splitlines()
+                )
+                for trace in traces
+            ):
+                raced_rounds += 1
+        # The race path must demonstrably execute: in a genuinely concurrent
+        # round BOTH processes pass the age check and reach the claim.
+        # Requiring 3 of 10 rounds tolerates a loaded machine occasionally
+        # serializing a round (unloaded runs hit 10/10) while still failing
+        # loudly if the harness ever degrades back to sequential execution.
+        self.assertGreaterEqual(
+            raced_rounds,
+            3,
+            f"only {raced_rounds}/10 rounds raced — the test is not exercising "
+            "the concurrent claim path",
+        )
+
+    def test_rearm_env_knobs_override_defaults(self):
+        first = self._run([_edit_entry()] * 5, session_id="knobs")
+        self.assertEqual(first.returncode, 2)
+        # Zero cool-down and a 1-edit delta: the very next stop re-fires.
+        second = self._run(
+            [_edit_entry()] * 6,
+            session_id="knobs",
+            extra_env={"WIKI_STOP_REARM_SECONDS": "0", "WIKI_STOP_REARM_EDITS": "1"},
+        )
+        self.assertEqual(second.returncode, 2)
 
 
 if __name__ == "__main__":
