@@ -131,7 +131,7 @@ obsidian-wiki/
 │   └── <skill-name>/SKILL.md            #   39 skills — see docs/skills.md
 │
 ├── obsidian_wiki/                       # Python package — CLI, setup, sync, session brain
-├── extensions/brain-capture/            # Zero-build Chrome capture extension
+├── extensions/brain/                    # Zero-build Chrome extension: capture + form fill
 ├── tools/check_readme_sync.py           # Translation drift reporter
 │
 ├── CLAUDE.md                            # Bootstrap → Claude Code / Kilocode (→ AGENTS.md)

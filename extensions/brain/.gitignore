@@ -1,0 +1,3 @@
+host/key.pem
+host/pubkey.b64
+host/run-host.sh

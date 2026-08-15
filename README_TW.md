@@ -28,7 +28,7 @@
 
 這個專案解決那個問題。指定一個資料夾，告訴你的 agent 要記住什麼，它就會把你學到的東西編譯成彼此連結、而且屬於你自己的 markdown。這個模式來自 Andrej Karpathy 的 [LLM Wiki gist](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f)：把知識編譯一次並持續維護，而不是每次都問 LLM 同樣的問題，或每次都重新跑 RAG。
 
-**Obsidian 是你觀看這個大腦的方式；AI agent 是你讓它成長的方式。**
+**你的第二大腦；AI agent 是你讓它成長的方式。**
 
 這裡每個 skill 都是一個 markdown 檔案，任何 agent 都能讀取並執行，包括 Claude Code、Cursor、Codex、Windsurf、Gemini CLI，以及[另外十幾種](https://github.com/Ar9av/obsidian-wiki/blob/main/docs/agents.md)。沒有 runtime、沒有 API key、不綁任何廠商。
 
@@ -120,6 +120,7 @@ obsidian-wiki sessions-query "the auth bug with the weird retry loop"
 | **[Configuration](https://github.com/Ar9av/obsidian-wiki/blob/main/docs/configuration.md)** | 設定變數、QMD 語意搜尋、`_raw/` 暫存區、GitHub 同步 |
 | **[Architecture](https://github.com/Ar9av/obsidian-wiki/blob/main/docs/architecture.md)** | 四個匯入階段、vault 結構、我們在 Karpathy 模式上加了什麼 |
 | **[Session Brain](https://github.com/Ar9av/obsidian-wiki/blob/main/docs/session-brain.md)** | 建立在 agent session 歷史之上的主題圖譜 |
+| **[Browser Extension](https://github.com/Ar9av/obsidian-wiki/blob/main/docs/browser-extension.md)** | 將網頁擷取進 vault，並用 vault 內容填寫網頁表單 |
 | **[Contributing](https://github.com/Ar9av/obsidian-wiki/blob/main/docs/contributing.md)** | 新增 skill、維持兩份 README 同步 |
 
 ## 參與貢獻

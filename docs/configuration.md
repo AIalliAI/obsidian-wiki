@@ -153,12 +153,12 @@ The directory is created automatically by `wiki-setup`. The path is configurable
 
 ### Browser capture extension
 
-This repo includes a zero-build Chrome extension at [`extensions/brain-capture/`](../extensions/brain-capture/) for saving web pages and selected text straight into `_raw/`.
+This repo includes a zero-build Chrome extension at [`extensions/brain/`](../extensions/brain/) for saving web pages and selected text straight into `_raw/`, and for filling web forms from the vault.
 
 1. Open `chrome://extensions`
 2. Enable **Developer mode**
 3. Click **Load unpacked**
-4. Select `extensions/brain-capture`
+4. Select `extensions/brain`
 
 To find your configured `_raw` folder from a clone of this repo:
 
