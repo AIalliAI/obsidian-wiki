@@ -98,6 +98,18 @@ one entry per `~/.obsidian-wiki/config.<name>`. It is the extension's equivalent
 of the `@name` override: a job application answers from `personal`, a vendor
 questionnaire from `work`, without re-pointing the symlink for everything else.
 
+A second vault only shows up once it has a profile file. Owning the folder is
+not enough — create one with `/wiki-switch new <name>`, or by hand:
+
+```bash
+printf '# My other vault\nOBSIDIAN_VAULT_PATH="%s"\n' ~/Knowledge \
+  > ~/.obsidian-wiki/config.knowledge
+```
+
+If the dropdown shows only `Default vault` when profiles do exist, the staged
+host predates this feature — re-run `install.sh` and restart Chrome. The popup
+says so explicitly rather than pretending you have one vault.
+
 The choice is remembered per browser profile, so a vault picked once stays
 picked. A profile whose `OBSIDIAN_VAULT_PATH` no longer exists is listed as
 `(missing)` and cannot be selected — and if it was the remembered one, the popup

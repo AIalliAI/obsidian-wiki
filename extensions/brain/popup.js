@@ -252,16 +252,20 @@ vaultSelect.addEventListener("change", () => {
 /**
  * Ask the host which vaults exist and offer them as targets.
  *
- * Failure here is deliberately silent: the host may not be installed yet, and
- * the picker is not what the user came for. The hardcoded "Default vault"
- * option keeps Fill working exactly as it did before, and pressing Fill
- * surfaces the real host error with its install instructions.
+ * A host that is missing entirely stays silent — it may simply not be
+ * installed, and pressing Fill surfaces that with its install instructions.
+ * A host that answers but rejects the request is different: it is a staged
+ * copy older than this popup, which otherwise looks identical to "you only
+ * have one vault" and hides the picker for no visible reason.
  */
 async function loadVaults(preferred) {
   let vaults;
   try {
     const response = await chrome.runtime.sendNativeMessage(HOST_NAME, { type: "vaults" });
     vaults = response?.ok ? response.vaults : undefined;
+    if (!response?.ok) {
+      setStatus("Vault list unavailable — re-run host/install.sh, then ⌘Q and reopen Chrome.", "error");
+    }
   } catch {
     vaults = undefined;
   }
