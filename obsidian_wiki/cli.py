@@ -56,6 +56,18 @@ def skills_dir() -> Path:
     )
 
 
+def extension_dir() -> Path | None:
+    """Return the browser extension folder to load unpacked, if bundled.
+
+    Wheel installs get it at ``_data/extension``; a source checkout keeps it at
+    ``extensions/brain``.
+    """
+    for cand in (_pkg_dir() / "_data" / "extension", _pkg_dir().parent / "extensions" / "brain"):
+        if (cand / "manifest.json").is_file():
+            return cand
+    return None
+
+
 def bootstrap_dir() -> Path | None:
     """Return the directory containing agent bootstrap context files.
 
@@ -1552,6 +1564,8 @@ def cmd_info(args: argparse.Namespace) -> int:
     print(f"skills:    {skills_dir()}")
     boot = bootstrap_dir()
     print(f"bootstrap: {boot if boot else '(not found)'}")
+    ext = extension_dir()
+    print(f"extension: {ext if ext else '(not bundled)'}")
     print(f"config:    {GLOBAL_CONFIG}{'' if GLOBAL_CONFIG.exists() else ' (not written yet)'}")
     if GLOBAL_CONFIG.exists():
         vp = _read_config_value("OBSIDIAN_VAULT_PATH")

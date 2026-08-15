@@ -1,3 +1,1 @@
-host/key.pem
-host/pubkey.b64
-host/run-host.sh
+# Nothing local-only may live here: this whole folder ships in the wheel.

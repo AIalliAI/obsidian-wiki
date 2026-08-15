@@ -50,20 +50,29 @@ mkdir -p "$LIB_DIR"
 cp "$HOST_SRC_DIR/brain_fill_host.py" "$STAGE_DIR/brain_fill_host.py"
 chmod +x "$STAGE_DIR/brain_fill_host.py"
 
+PYTHON_BIN="$(command -v python3)"
+
+# Two ways to get here: a git checkout (stage a copy of the package, so the
+# host keeps working even if the checkout later moves into a TCC-protected
+# folder), or an installed wheel that already contains this file, in which case
+# the package is importable and needs no staging.
 if [ -d "$REPO_DIR/obsidian_wiki" ]; then
   rm -rf "$LIB_DIR/obsidian_wiki"
   cp -R "$REPO_DIR/obsidian_wiki" "$LIB_DIR/obsidian_wiki"
   find "$LIB_DIR/obsidian_wiki" -name '__pycache__' -type d -exec rm -rf {} + 2>/dev/null || true
+  PY_PATH="$LIB_DIR"
   echo "staged obsidian_wiki package -> $LIB_DIR/obsidian_wiki"
+elif "$PYTHON_BIN" -c 'import obsidian_wiki' 2>/dev/null; then
+  PY_PATH=""
+  echo "using installed obsidian_wiki package"
 else
-  echo "warning: no obsidian_wiki package at $REPO_DIR; relying on a system install" >&2
+  echo "error: no obsidian_wiki package found (no checkout, not importable)" >&2
+  exit 1
 fi
 
-# Verify the staged copy is actually the version we need, before Chrome finds
-# out the hard way.
-PYTHON_BIN="$(command -v python3)"
-if ! PYTHONPATH="$LIB_DIR" "$PYTHON_BIN" -m obsidian_wiki --help 2>/dev/null | grep -q context-pack; then
-  echo "error: staged obsidian_wiki does not support context-pack" >&2
+# Verify context-pack support before Chrome finds out the hard way.
+if ! PYTHONPATH="$PY_PATH" "$PYTHON_BIN" -m obsidian_wiki --help 2>/dev/null | grep -q context-pack; then
+  echo "error: this obsidian_wiki does not support context-pack; upgrade it" >&2
   exit 1
 fi
 
@@ -77,7 +86,7 @@ fi
 # the user is perfectly well logged in.
 cat > "$LAUNCHER" <<EOF
 #!/usr/bin/env bash
-export PYTHONPATH="$LIB_DIR\${PYTHONPATH:+:\$PYTHONPATH}"
+${PY_PATH:+export PYTHONPATH="$PY_PATH\${PYTHONPATH:+:\$PYTHONPATH}"}
 export PATH="$PATH"
 export HOME="\${HOME:-$HOME}"
 export USER="\${USER:-$(id -un)}"

@@ -17,6 +17,15 @@ messaging host, because no reasoning model can run inside a browser extension.
 1. Open `chrome://extensions` and enable **Developer mode**.
 2. **Load unpacked** → select `extensions/brain`.
 
+Installed from PyPI rather than a checkout? The extension ships in the package.
+Ask for its path:
+
+```bash
+obsidian-wiki info        # → extension: …/obsidian_wiki/_data/extension
+```
+
+and load that folder unpacked instead.
+
 That is all capture needs. For form filling, also run:
 
 ```bash
