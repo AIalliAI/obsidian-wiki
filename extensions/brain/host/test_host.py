@@ -12,6 +12,8 @@ HOST = Path(__file__).with_name("brain_fill_host.py")
 REQUEST = {
     "type": "fill",
     "engine": sys.argv[1] if len(sys.argv) > 1 else "claude",
+    # Empty means "whatever ~/.obsidian-wiki/config points at", same as the popup.
+    "vault": sys.argv[2] if len(sys.argv) > 2 else "",
     "form": {
         "url": "https://example.com/vendor-review",
         "title": "Vendor Security Review — AI Coding Agent Tooling",
@@ -31,7 +33,8 @@ REQUEST = {
 
 
 def main() -> None:
-    payload = json.dumps(REQUEST).encode()
+    request = {"type": "vaults"} if sys.argv[1:2] == ["vaults"] else REQUEST
+    payload = json.dumps(request).encode()
     process = subprocess.run(
         [sys.executable, str(HOST)],
         input=struct.pack("<I", len(payload)) + payload,

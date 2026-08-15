@@ -64,8 +64,8 @@ Captures are staged, not finished pages. Promote them with:
 
 ## Fill form
 
-Open a form, switch to the **Fill form** tab, pick an engine, click **Fill from
-brain**.
+Open a form, switch to the **Fill form** tab, pick a vault and an engine, click
+**Fill from brain**.
 
 ```
 content script          popup + native host        native host (python)
@@ -89,6 +89,21 @@ re-reading) and carry a tooltip naming their source page. The popup lists every
 value with its confidence and origin.
 
 **It never submits.** Filling is the entire feature.
+
+### Choosing which vault answers
+
+The **Answer from** dropdown lists every vault profile `wiki-switch` knows about
+— `Default vault` (whatever `~/.obsidian-wiki/config` currently points at) plus
+one entry per `~/.obsidian-wiki/config.<name>`. It is the extension's equivalent
+of the `@name` override: a job application answers from `personal`, a vendor
+questionnaire from `work`, without re-pointing the symlink for everything else.
+
+The choice is remembered per browser profile, so a vault picked once stays
+picked. A profile whose `OBSIDIAN_VAULT_PATH` no longer exists is listed as
+`(missing)` and cannot be selected — and if it was the remembered one, the popup
+says so and falls back to the default rather than quietly answering from a vault
+you did not choose. Only the fill side reads this; capture writes to the `_raw`
+folder you picked with the folder picker.
 
 ### What it will not fill
 
@@ -209,5 +224,7 @@ Logs live at `~/.obsidian-wiki/brain-fill.log`. Every run brackets itself with
 Drive the host without Chrome at all:
 
 ```bash
-python3 extensions/brain/host/test_host.py claude    # or: codex
+python3 extensions/brain/host/test_host.py claude          # or: codex
+python3 extensions/brain/host/test_host.py claude work     # answer from config.work
+python3 extensions/brain/host/test_host.py vaults          # list what the popup would offer
 ```

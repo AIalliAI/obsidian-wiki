@@ -89,14 +89,100 @@ def read_env_file(path: Path) -> dict[str, str]:
     return values
 
 
-def resolve_vault() -> Path:
+CONFIG_DIR = Path.home() / ".obsidian-wiki"
+
+
+def named_config(name: str) -> Path:
+    return CONFIG_DIR / f"config.{name}"
+
+
+def active_vault_name() -> str | None:
+    """Which named profile `config` currently points at, if any.
+
+    `wiki-switch` activates a profile by symlinking `config` -> `config.<name>`,
+    so the link target is the only place the active name is written down.
+    """
+    link = CONFIG_DIR / "config"
+    try:
+        target = Path(os.readlink(link)).name
+    except OSError:
+        return None
+    return target.split(".", 1)[1] if target.startswith("config.") else None
+
+
+def list_vaults() -> list[dict]:
+    """Every vault the user could pick, newest resolution rules applied.
+
+    The first entry is the active-config default, which is what every previous
+    build used; named profiles follow. `exists` is reported rather than filtered
+    so the popup can show a stale profile as unusable instead of hiding it.
+    """
+    active = active_vault_name()
+
+    vaults: list[dict] = []
+    try:
+        default_path = str(resolve_vault())
+        default_ok = True
+    except RuntimeError:
+        default_path = ""
+        default_ok = False
+    vaults.append({
+        "name": "",
+        "label": f"Default vault{f' ({active})' if active else ''}",
+        "path": default_path,
+        "exists": default_ok,
+    })
+
+    for config in sorted(CONFIG_DIR.glob("config.*")):
+        if not config.is_file():
+            continue
+        name = config.name.split(".", 1)[1]
+        raw = read_env_file(config).get("OBSIDIAN_VAULT_PATH", "")
+        path = Path(os.path.expanduser(raw)) if raw else None
+        vaults.append({
+            "name": name,
+            "label": name + (" — active" if name == active else ""),
+            "path": str(path) if path else "",
+            "exists": bool(path and path.is_dir()),
+        })
+
+    return vaults
+
+
+def resolve_named_vault(name: str) -> Path:
+    """Resolve one `~/.obsidian-wiki/config.<name>` profile.
+
+    Never falls back to the default vault: a silent fallback would answer a
+    form from the wrong vault, which is exactly what picking a vault is meant
+    to prevent.
+    """
+    config = named_config(name)
+    raw = read_env_file(config).get("OBSIDIAN_VAULT_PATH", "").strip()
+    if not raw:
+        available = [entry["name"] for entry in list_vaults() if entry["name"]]
+        raise RuntimeError(
+            f"Vault {name!r} is not configured ({config} has no OBSIDIAN_VAULT_PATH). "
+            + ("Available: " + ", ".join(available) if available else "No named vaults exist.")
+        )
+
+    path = Path(os.path.expanduser(raw))
+    if not path.is_dir():
+        raise RuntimeError(f"Vault {name!r} points at {path}, which does not exist.")
+    log(f"vault resolved from {config}: {path}")
+    return path
+
+
+def resolve_vault(name: str | None = None) -> Path:
+    if name:
+        return resolve_named_vault(name)
+
     candidates: list[tuple[str, str]] = []
 
     env_value = os.environ.get("OBSIDIAN_VAULT_PATH", "").strip()
     if env_value:
         candidates.append(("OBSIDIAN_VAULT_PATH env", env_value))
 
-    global_config = Path.home() / ".obsidian-wiki" / "config"
+    global_config = CONFIG_DIR / "config"
     value = read_env_file(global_config).get("OBSIDIAN_VAULT_PATH", "")
     if value:
         candidates.append((str(global_config), value))
@@ -454,7 +540,8 @@ def handle_fill(request: dict) -> dict:
     if not form.get("fields"):
         return {"ok": False, "error": "No fillable fields were found on this page."}
 
-    vault = resolve_vault()
+    vault_name = (request.get("vault") or "").strip()
+    vault = resolve_vault(vault_name or None)
     topic = build_topic(form)
     pack = fetch_pack(vault, topic)
     log(f"pack: {pack.get('pages_included')} of {pack.get('candidate_pages')} pages, "
@@ -473,7 +560,12 @@ def handle_fill(request: dict) -> dict:
         return {
             "ok": True,
             "fills": [],
-            "meta": {"vault": str(vault), "topic": topic, "candidate_pages": 0},
+            "meta": {
+                "vault": str(vault),
+                "vault_name": vault_name,
+                "topic": topic,
+                "candidate_pages": 0,
+            },
             "note": "The vault has nothing relevant to this form.",
         }
 
@@ -485,6 +577,7 @@ def handle_fill(request: dict) -> dict:
 
     meta.update({
         "vault": str(vault),
+        "vault_name": vault_name,
         "topic": topic,
         "candidate_pages": pack.get("candidate_pages"),
         "pages_included": pack.get("pages_included"),
@@ -507,6 +600,8 @@ def main() -> None:
         try:
             if request.get("type") == "ping":
                 response = {"ok": True, "pong": True}
+            elif request.get("type") == "vaults":
+                response = {"ok": True, "vaults": list_vaults()}
             elif request.get("type") == "fill":
                 response = handle_fill(request)
             else:

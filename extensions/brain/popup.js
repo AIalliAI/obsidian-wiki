@@ -12,6 +12,8 @@ const paneFill = document.querySelector("#paneFill");
 const lede = document.querySelector("#lede");
 const fillButton = document.querySelector("#fill");
 const engineSelect = document.querySelector("#engine");
+const vaultSelect = document.querySelector("#vault");
+const vaultStatus = document.querySelector("#vaultStatus");
 const resultsList = document.querySelector("#results");
 
 const folderStatus = document.querySelector("#folderStatus");
@@ -230,14 +232,72 @@ function selectTab(mode) {
 tabCapture.addEventListener("click", () => selectTab("capture"));
 tabFill.addEventListener("click", () => selectTab("fill"));
 
-chrome.storage?.local.get(["mode", "engine"]).then(({ mode, engine }) => {
+chrome.storage?.local.get(["mode", "engine", "vault"]).then(({ mode, engine, vault }) => {
   if (engine) engineSelect.value = engine;
   if (mode === "fill") selectTab("fill");
+  loadVaults(vault);
 });
 
 engineSelect.addEventListener("change", () => {
   chrome.storage?.local.set({ engine: engineSelect.value });
 });
+
+// ── Vault picker ─────────────────────────────────────────────────────────
+
+vaultSelect.addEventListener("change", () => {
+  chrome.storage?.local.set({ vault: vaultSelect.value });
+  describeVault();
+});
+
+/**
+ * Ask the host which vaults exist and offer them as targets.
+ *
+ * Failure here is deliberately silent: the host may not be installed yet, and
+ * the picker is not what the user came for. The hardcoded "Default vault"
+ * option keeps Fill working exactly as it did before, and pressing Fill
+ * surfaces the real host error with its install instructions.
+ */
+async function loadVaults(preferred) {
+  let vaults;
+  try {
+    const response = await chrome.runtime.sendNativeMessage(HOST_NAME, { type: "vaults" });
+    vaults = response?.ok ? response.vaults : undefined;
+  } catch {
+    vaults = undefined;
+  }
+
+  if (!vaults?.length) {
+    describeVault();
+    return;
+  }
+
+  vaultSelect.replaceChildren();
+  vaults.forEach((entry) => {
+    const option = document.createElement("option");
+    option.value = entry.name || "";
+    option.textContent = entry.exists ? entry.label : `${entry.label} (missing)`;
+    option.dataset.path = entry.path || "";
+    option.disabled = !entry.exists;
+    vaultSelect.append(option);
+  });
+
+  // A remembered vault that has since been deleted must not silently redirect
+  // the answer to whatever vault happens to be first in the list.
+  const match = Array.from(vaultSelect.options).find(
+    (option) => option.value === (preferred || "") && !option.disabled,
+  );
+  vaultSelect.value = match ? match.value : "";
+  if (preferred && !match) {
+    setStatus(`Vault "${preferred}" is gone — using the default.`, "error");
+    chrome.storage?.local.set({ vault: "" });
+  }
+  describeVault();
+}
+
+function describeVault() {
+  const option = vaultSelect.selectedOptions[0];
+  vaultStatus.textContent = option?.dataset.path || "Whatever ~/.obsidian-wiki/config points at.";
+}
 
 // ── Fill ─────────────────────────────────────────────────────────────────
 
@@ -258,10 +318,12 @@ fillButton.addEventListener("click", async () => {
       throw new Error("No fillable fields found on this page.");
     }
 
-    setStatus(`Found ${form.fields.length} fields. Asking your vault…`);
+    const vaultLabel = vaultSelect.value ? `the ${vaultSelect.value} vault` : "your vault";
+    setStatus(`Found ${form.fields.length} fields. Asking ${vaultLabel}…`);
     const response = await chrome.runtime.sendNativeMessage(HOST_NAME, {
       type: "fill",
       engine: engineSelect.value,
+      vault: vaultSelect.value,
       form,
     });
 
